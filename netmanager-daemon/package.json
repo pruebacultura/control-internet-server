@@ -1,0 +1,17 @@
+{
+  "name": "netmanager-daemon",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "node-windows": "^1.0.0-beta.8",
+    "ws": "^8.20.1"
+  }
+}

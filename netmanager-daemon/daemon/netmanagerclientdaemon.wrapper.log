@@ -1,0 +1,2 @@
+2026-05-28 12:37:58 - Starting C:\Program Files\nodejs\node.exe  --harmony D:\Trabajo\proyectos\control-internet-server\netmanager-daemon\node_modules\node-windows\lib\wrapper.js --file D:\Trabajo\proyectos\control-internet-server\netmanager-daemon\client-daemon.js --scriptoptions= --log "NetManagerClientDaemon wrapper" --grow 0.25 --wait 1 --maxrestarts 3 --abortonerror n --stopparentfirst undefined
+2026-05-28 12:37:58 - Started 11732
