@@ -18,26 +18,13 @@ let config = {
 try {
   if (fs.existsSync(configPath)) {
     config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-
-    console.log(
-      `⚙️ Configuración cargada. Servidor Máster en: ${config.server_ip}:${config.server_port}`
-    );
+    console.log(`⚙️ Configuración cargada. Servidor Máster en: ${config.server_ip}:${config.server_port}`);
   } else {
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify(config, null, 2),
-      'utf-8'
-    );
-
-    console.log(
-      '⚠️ config.json no encontrado. Se creó uno por defecto.'
-    );
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+    console.log('⚠️ config.json no encontrado. Se creó uno por defecto.');
   }
 } catch (error) {
-  console.error(
-    '❌ Error leyendo config.json:',
-    error.message
-  );
+  console.error('❌ Error leyendo config.json:', error.message);
 }
 
 // =========================================================================
@@ -55,13 +42,9 @@ let reconnecting = false;
 
 function heartbeat() {
   clearTimeout(pingTimeout);
-
   pingTimeout = setTimeout(() => {
     console.log('⚠️ Heartbeat perdido. Socket muerto.');
-
-    if (ws) {
-      ws.terminate();
-    }
+    if (ws) ws.terminate();
   }, 30000);
 }
 
@@ -71,11 +54,9 @@ function heartbeat() {
 
 function reconnect() {
   if (reconnecting) return;
-
   reconnecting = true;
-
   console.log('🔄 Reintentando conexión en 5 segundos...');
-
+  
   reconnectTimer = setTimeout(() => {
     reconnecting = false;
     conectarServidor();
@@ -83,57 +64,31 @@ function reconnect() {
 }
 
 // =========================================================================
-// 5. FIREWALL - BLOQUEAR INTERNET
+// 5. FIREWALL - BLOQUEAR INTERNET (A prueba de fallos)
 // =========================================================================
 
 function bloquearInternet() {
-  const serverIP = config.server_ip;
+  console.log('🔒 Aplicando bloqueo de internet (Navegación Web)...');
 
-  console.log('🔒 Aplicando bloqueo de internet...');
+  // Limpiamos cualquier regla residual antes de aplicar las nuevas
+  exec('netsh advfirewall firewall delete rule name="BloqueoInternet"', () => {
+      
+      // Regla 1: Bloquear Navegación Tradicional (TCP 80 y 443)
+      const reglaTCP = 'netsh advfirewall firewall add rule name="BloqueoInternet" dir=out action=block protocol=TCP remoteport=80,443';
+      
+      // Regla 2: Bloquear Navegadores Modernos con QUIC (UDP 443)
+      const reglaUDP = 'netsh advfirewall firewall add rule name="BloqueoInternet" dir=out action=block protocol=UDP remoteport=443';
 
-  // Eliminamos reglas anteriores
-  exec(
-    'netsh advfirewall firewall delete rule name="BloqueoInternet"',
-    () => {
-      exec(
-        'netsh advfirewall firewall delete rule name="PermitirServidor"',
-        () => {
-
-          // Regla: bloquear TODO
-          const reglaBloqueo =
-            'netsh advfirewall firewall add rule name="BloqueoInternet" dir=out action=block remoteip=0.0.0.0-255.255.255.255 protocol=ANY';
-
-          // Regla: permitir servidor websocket
-          const reglaPermitirServidor =
-            `netsh advfirewall firewall add rule name="PermitirServidor" dir=out action=allow remoteip=${serverIP} protocol=ANY`;
-
-          exec(reglaBloqueo, (errBloqueo) => {
-            if (errBloqueo) {
-              console.error(
-                '❌ Error creando regla de bloqueo:',
-                errBloqueo.message
-              );
-              return;
-            }
-
-            exec(reglaPermitirServidor, (errAllow) => {
-              if (errAllow) {
-                console.error(
-                  '❌ Error permitiendo servidor:',
-                  errAllow.message
-                );
-                return;
-              }
-
-              console.log(
-                '✅ Internet bloqueado correctamente.'
-              );
-            });
-          });
-        }
-      );
-    }
-  );
+      exec(reglaTCP, (errTCP) => {
+        if (errTCP) console.error('❌ Error creando regla TCP:', errTCP.message);
+        
+        exec(reglaUDP, (errUDP) => {
+          if (errUDP) console.error('❌ Error creando regla UDP:', errUDP.message);
+          
+          console.log('✅ Internet bloqueado (Puertos 80, 443 cerrados). El WebSocket sigue en línea.');
+        });
+      });
+  });
 }
 
 // =========================================================================
@@ -143,19 +98,10 @@ function bloquearInternet() {
 function desbloquearInternet() {
   console.log('🔓 Restaurando conexión a internet...');
 
-  exec(
-    'netsh advfirewall firewall delete rule name="BloqueoInternet"',
-    () => {
-      exec(
-        'netsh advfirewall firewall delete rule name="PermitirServidor"',
-        () => {
-          console.log(
-            '✅ Internet restaurado correctamente.'
-          );
-        }
-      );
-    }
-  );
+  // Con solo eliminar la regla, Windows vuelve a su comportamiento por defecto (Permitir)
+  exec('netsh advfirewall firewall delete rule name="BloqueoInternet"', () => {
+    console.log('✅ Internet restaurado correctamente.');
+  });
 }
 
 // =========================================================================
@@ -164,108 +110,50 @@ function desbloquearInternet() {
 
 function conectarServidor() {
   const url = `ws://${config.server_ip}:${config.server_port}`;
+  console.log(`🌐 Intentando conectar al servidor central en ${url}...`);
 
-  console.log(
-    `🌐 Intentando conectar al servidor central en ${url}...`
-  );
-
-  ws = new WebSocket(url, {
-    handshakeTimeout: 5000
-  });
-
-  // =========================================================
-  // CONEXIÓN EXITOSA
-  // =========================================================
+  ws = new WebSocket(url, { handshakeTimeout: 5000 });
 
   ws.on('open', () => {
-    console.log(
-      '✅ Conectado exitosamente al Panel Central.'
-    );
-
+    console.log('✅ Conectado exitosamente al Panel Central.');
     heartbeat();
-
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
 
-    // Registramos el puesto
-    ws.send(
-      JSON.stringify({
-        action: 'REGISTER',
-        ip: config.client_ip
-      })
-    );
+    // Registramos el puesto con la IP configurada
+    ws.send(JSON.stringify({ action: 'REGISTER', ip: config.client_ip }));
   });
 
-  // =========================================================
-  // HEARTBEAT
-  // =========================================================
-
   ws.on('ping', heartbeat);
-
-  // =========================================================
-  // MENSAJES
-  // =========================================================
 
   ws.on('message', (data) => {
     try {
       const mensaje = JSON.parse(data);
+      console.log(`📩 Orden recibida: ${mensaje.action}`);
 
-      console.log(
-        `📩 Orden recibida: ${mensaje.action}`
-      );
-
-      // BLOQUEAR INTERNET
-      if (mensaje.action === 'BLOCK_ON') {
-        bloquearInternet();
-      }
-
-      // DESBLOQUEAR INTERNET
-      else if (mensaje.action === 'BLOCK_OFF') {
-        desbloquearInternet();
-      }
+      if (mensaje.action === 'BLOCK_ON') bloquearInternet();
+      else if (mensaje.action === 'BLOCK_OFF') desbloquearInternet();
 
     } catch (e) {
-      console.error(
-        '❌ Error procesando mensaje:',
-        e.message
-      );
+      console.error('❌ Error procesando mensaje:', e.message);
     }
   });
 
-  // =========================================================
-  // CIERRE DE SOCKET
-  // =========================================================
-
   ws.on('close', () => {
-    console.log(
-      '❌ Conexión cerrada con el servidor.'
-    );
-
+    console.log('❌ Conexión cerrada con el servidor.');
     clearTimeout(pingTimeout);
-
     reconnect();
   });
 
-  // =========================================================
-  // ERRORES
-  // =========================================================
-
   ws.on('error', (err) => {
-    console.error(
-      '❌ Error WebSocket:',
-      err.message
-    );
-
-    if (ws) {
-      ws.terminate();
-    }
+    console.error('❌ Error WebSocket:', err.message);
+    if (ws) ws.terminate();
   });
 }
 
 // =========================================================================
 // 8. INICIO
 // =========================================================================
-
 conectarServidor();
