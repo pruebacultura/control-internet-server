@@ -1,2 +1,18 @@
-2026-05-28 12:37:58 - Starting C:\Program Files\nodejs\node.exe  --harmony D:\Trabajo\proyectos\control-internet-server\netmanager-daemon\node_modules\node-windows\lib\wrapper.js --file D:\Trabajo\proyectos\control-internet-server\netmanager-daemon\client-daemon.js --scriptoptions= --log "NetManagerClientDaemon wrapper" --grow 0.25 --wait 1 --maxrestarts 3 --abortonerror n --stopparentfirst undefined
-2026-05-28 12:37:58 - Started 11732
+2026-05-29 11:28:35 - Starting C:\Program Files\nodejs\node.exe  --harmony D:\Trabajo\proyectos\control-internet-server\netmanager-daemon\node_modules\node-windows\lib\wrapper.js --file D:\Trabajo\proyectos\control-internet-server\netmanager-daemon\client-daemon.js --scriptoptions= --log "NetManagerClientDaemon wrapper" --grow 0.25 --wait 1 --maxrestarts 3 --abortonerror n --stopparentfirst undefined
+2026-05-29 11:28:35 - Started 18944
+2026-05-29 11:31:03 - Stopping netmanagerclientdaemon.exe
+2026-05-29 11:31:03 - ProcessKill 18944
+2026-05-29 11:31:03 - Found child process: 14488 Name: conhost.exe
+2026-05-29 11:31:03 - Found child process: 5800 Name: node.exe
+2026-05-29 11:31:04 - Stopping process 14488
+2026-05-29 11:31:04 - Send SIGINT 14488
+2026-05-29 11:31:04 - SIGINT to 14488 failed - Killing as fallback
+2026-05-29 11:31:04 - Stopping process 5800
+2026-05-29 11:31:04 - Send SIGINT 5800
+2026-05-29 11:31:04 - SIGINT to 5800 failed - Killing as fallback
+2026-05-29 11:31:04 - Stopping process 18944
+2026-05-29 11:31:04 - Send SIGINT 18944
+2026-05-29 11:31:04 - SIGINT to 18944 failed - Killing as fallback
+2026-05-29 11:31:04 - Finished netmanagerclientdaemon.exe
+2026-05-29 11:31:17 - Starting C:\Program Files\nodejs\node.exe  --harmony D:\Trabajo\proyectos\control-internet-server\netmanager-daemon\node_modules\node-windows\lib\wrapper.js --file D:\Trabajo\proyectos\control-internet-server\netmanager-daemon\client-daemon.js --scriptoptions= --log "NetManagerClientDaemon wrapper" --grow 0.25 --wait 1 --maxrestarts 3 --abortonerror n --stopparentfirst undefined
+2026-05-29 11:31:17 - Started 18528

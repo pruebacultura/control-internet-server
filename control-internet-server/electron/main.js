@@ -86,116 +86,282 @@ function notificarCambioRed() {
 // =========================================================================
 // 3. CONFIGURACIÓN DEL SERVIDOR WEBSOCKET (Comunicación con Daemons)
 // =========================================================================
+function heartbeat() {
+  this.isAlive = true;
+}
+
 function iniciarServidorWebSocket() {
   wss = new WebSocketServer({ port: 8080 });
+
   console.log('📡 Servidor WebSocket escuchando en el puerto 8080');
 
+  // =========================================================================
+  // HEARTBEAT GLOBAL
+  // =========================================================================
+
+  const interval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+
+      // Si no respondió al ping anterior -> matar socket
+      if (ws.isAlive === false) {
+        console.log('⚠️ Cliente muerto eliminado automáticamente');
+
+        return ws.terminate();
+      }
+
+      ws.isAlive = false;
+
+      try {
+        ws.ping();
+      } catch (e) {
+        console.error(
+          '❌ Error enviando ping:',
+          e.message
+        );
+      }
+    });
+  }, 10000);
+
+  // =========================================================================
+  // NUEVA CONEXIÓN
+  // =========================================================================
+
   wss.on('connection', (ws, req) => {
-    // Variable para guardar la IP "oficial" del cliente una vez que se registre
+
+    ws.isAlive = true;
+
+    ws.on('pong', heartbeat);
+
     let ipAsignada = null;
-    
-    // Mostramos la conexión física inicial en la consola
+
     const ipFisica = req.socket.remoteAddress.replace(/^.*:/, '');
-    console.log(`📡 Conexión física entrante desde: ${ipFisica} - Esperando mensaje REGISTER...`);
+
+    console.log(
+      `📡 Conexión física entrante desde: ${ipFisica}`
+    );
+
+    // =====================================================================
+    // MENSAJES
+    // =====================================================================
 
     ws.on('message', (message) => {
+
       try {
+
         const data = JSON.parse(message);
-        
+
+        // ===============================================================
+        // REGISTER
+        // ===============================================================
+
         if (data.action === 'REGISTER') {
+
           let ipRecibida = data.ip;
-          
-          // 🛡️ FILTRO LOCALHOST: Si viene de bucle local, forzamos '127.0.0.1' para hacer match con la BD
-          if (ipRecibida === '1' || ipRecibida === '::1' || ipRecibida === 'localhost' || ipRecibida === '127.0.0.1') {
+
+          // Corrección localhost
+          if (
+            ipRecibida === '1' ||
+            ipRecibida === '::1' ||
+            ipRecibida === 'localhost' ||
+            ipRecibida === '127.0.0.1'
+          ) {
             ipAsignada = '127.0.0.1';
           } else {
             ipAsignada = ipRecibida;
           }
 
-          console.log(`🔌 Solicitud de registro para la IP: ${ipAsignada}`);
+          console.log(
+            `🔌 Registro solicitado para IP: ${ipAsignada}`
+          );
 
-          // 1. Buscamos el puesto en la base de datos
-          db.get("SELECT id, nombre FROM puestos WHERE ip_address = ?", [ipAsignada], (err, row) => {
-            if (err) {
-              console.error("❌ Error al consultar la BD en REGISTER:", err.message);
-              return;
-            }
+          // ===========================================================
+          // VALIDAR EN BD
+          // ===========================================================
 
-            if (row) {
-              const ahora = new Date().toISOString();
-              
-              // 2. GUARDAMOS EL SOCKET ACTIVO EN MEMORIA
+          db.get(
+            "SELECT id, nombre FROM puestos WHERE ip_address = ?",
+            [ipAsignada],
+            (err, row) => {
+
+              if (err) {
+                console.error(
+                  "❌ Error consultando BD:",
+                  err.message
+                );
+
+                return;
+              }
+
+              if (!row) {
+                console.warn(
+                  `⚠️ Intento de conexión desde IP no registrada: ${ipAsignada}`
+                );
+
+                return;
+              }
+
+              // =======================================================
+              // ELIMINAR SOCKET ANTERIOR SI EXISTE
+              // =======================================================
+
+              const socketAnterior =
+                clientesConectados.get(ipAsignada);
+
+              if (socketAnterior && socketAnterior !== ws) {
+
+                console.log(
+                  `⚠️ Socket anterior encontrado para ${ipAsignada}. Eliminando...`
+                );
+
+                try {
+                  socketAnterior.terminate();
+                } catch (e) {}
+              }
+
+              // =======================================================
+              // REGISTRAR SOCKET NUEVO
+              // =======================================================
+
               clientesConectados.set(ipAsignada, ws);
 
-              // 3. ACTUALIZAMOS LA BASE DE DATOS (Pasar a 'ON' y registrar historial)
+              const ahora = new Date().toISOString();
+
               db.serialize(() => {
+
                 db.run("BEGIN TRANSACTION");
-                
-                // Cambiamos el estado del puesto a 'ON' y guardamos la hora de conexión
-                db.run("UPDATE puestos SET estado_actual = 'ON', ultima_conexion = ? WHERE id = ?", [ahora, row.id]);
-                
-                // Creamos una nueva entrada limpia en el historial de auditoría
-                db.run("INSERT INTO historial_conexiones (puesto_id, evento, fecha_inicio) VALUES (?, 'ON', ?)", [row.id, ahora]);
-                
+
+                // Estado ON
+                db.run(
+                  "UPDATE puestos SET estado_actual = ?, ultima_conexion = ? WHERE id = ?",
+                  ['ON', ahora, row.id]
+                );
+
+                // Historial
+                db.run(
+                  "INSERT INTO historial_conexiones (puesto_id, evento, fecha_inicio) VALUES (?, 'ON', ?)",
+                  [row.id, ahora]
+                );
+
                 db.run("COMMIT", (commitErr) => {
+
                   if (commitErr) {
-                    console.error("❌ Error al confirmar el estado ON en la BD:", commitErr.message);
+
+                    console.error(
+                      "❌ Error confirmando transacción:",
+                      commitErr.message
+                    );
+
                   } else {
-                    console.log(`✅ Puesto reconocido y ACTIVADO en BD: ${row.nombre} (${ipAsignada})`);
-                    // Notificamos a React para que actualice el Dashboard instantáneamente
+
+                    console.log(
+                      `✅ Puesto conectado: ${row.nombre} (${ipAsignada})`
+                    );
+
                     notificarCambioRed();
                   }
                 });
               });
-
-            } else {
-              console.warn(`⚠️ Intento de registro desde IP no registrada en la BD: ${ipAsignada}`);
             }
-          });
+          );
         }
-        // Aquí puedes procesar otras acciones que envíe el cliente en el futuro
+
       } catch (e) {
-        console.error("Error al parsear mensaje del cliente:", e);
+
+        console.error(
+          "❌ Error parseando mensaje:",
+          e.message
+        );
       }
     });
 
-    // [Fragmento corregido de la lógica de cierre de sesión en main.js]
+    // =====================================================================
+    // SOCKET CERRADO
+    // =====================================================================
+
     ws.on('close', () => {
-      if (ipAsignada) {
-        console.log(`❌ Daemon desconectado: ${ipAsignada}`);
-        clientesConectados.delete(ipAsignada);
-        
-        db.get("SELECT id FROM puestos WHERE ip_address = ?", [ipAsignada], (err, row) => {
-          if (!err && row) {
-            const ahora = new Date().toISOString();
-            db.get(
-              "SELECT id, fecha_inicio FROM historial_conexiones WHERE puesto_id = ? AND evento = 'ON' AND fecha_fin IS NULL ORDER BY id DESC LIMIT 1",
-              [row.id],
-              (err, log) => {
-                if (!err && log) {
-                  const inicio = new Date(log.fecha_inicio).getTime();
-                  const fin = new Date(ahora).getTime();
-                  const duracion = Math.floor((fin - inicio) / 1000);
-                  
-                  db.run("UPDATE historial_conexiones SET fecha_fin = ?, duracion_segundos = ? WHERE id = ?",
-                    [ahora, duracion, log.id]);
-                  db.run("UPDATE puestos SET estado_actual = 'OFF' WHERE id = ?", [row.id]);
-                  notificarCambioRed();
-                }
+
+      if (!ipAsignada) return;
+
+      console.log(
+        `❌ Daemon desconectado: ${ipAsignada}`
+      );
+
+      clientesConectados.delete(ipAsignada);
+
+      db.get(
+        "SELECT id FROM puestos WHERE ip_address = ?",
+        [ipAsignada],
+        (err, row) => {
+
+          if (err || !row) return;
+
+          const ahora = new Date().toISOString();
+
+          db.get(
+            `SELECT id, fecha_inicio
+             FROM historial_conexiones
+             WHERE puesto_id = ?
+             AND evento = 'ON'
+             AND fecha_fin IS NULL
+             ORDER BY id DESC
+             LIMIT 1`,
+            [row.id],
+            (err, log) => {
+
+              if (!err && log) {
+
+                const inicio =
+                  new Date(log.fecha_inicio).getTime();
+
+                const fin =
+                  new Date(ahora).getTime();
+
+                const duracion =
+                  Math.floor((fin - inicio) / 1000);
+
+                db.run(
+                  `UPDATE historial_conexiones
+                   SET fecha_fin = ?, duracion_segundos = ?
+                   WHERE id = ?`,
+                  [ahora, duracion, log.id]
+                );
               }
-            );
-          }
-        });
-      }
+
+              db.run(
+                "UPDATE puestos SET estado_actual = ? WHERE id = ?",
+                ['OFF', row.id]
+              );
+
+              notificarCambioRed();
+            }
+          );
+        }
+      );
     });
-    
+
+    // =====================================================================
+    // ERROR
+    // =====================================================================
+
     ws.on('error', (err) => {
-      console.error(`Error en el socket (${ipAsignada || 'No registrado'}):`, err.message);
-      if (ipAsignada) {
-        clientesConectados.delete(ipAsignada);
-        notificarCambioRed();
-      }
+
+      console.error(
+        `❌ Error socket (${ipAsignada || 'No registrado'}):`,
+        err.message
+      );
+
+      try {
+        ws.terminate();
+      } catch (e) {}
     });
+  });
+
+  // =========================================================================
+  // LIMPIEZA
+  // =========================================================================
+
+  wss.on('close', () => {
+    clearInterval(interval);
   });
 }
 
