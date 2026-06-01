@@ -4,18 +4,35 @@ const fs = require('fs');
 const path = require('path');
 
 // =========================================================================
-// 0. SISTEMA DE LOGS CON FECHA Y HORA
+// 0. SISTEMA DE LOGS PERSISTENTE (CONSOLA + ARCHIVO UNIFICADO EN /DAEMON)
 // =========================================================================
+const logFolder = path.join(__dirname, 'daemon');
+const logFile = path.join(logFolder, 'debug-completo.log');
+
 function logMessage(level, prefix, message) {
-  const timestamp = new Date().toISOString(); // Formato: 2023-10-25T14:30:00.000Z
+  const timestamp = new Date().toISOString(); // Formato: 2026-06-01T14:30:00.000Z
   const formattedMessage = `[${timestamp}] [${level}] [${prefix}] ${message}`;
   
+  // 1. Enviar a salidas estándar (Para que node-windows llene sus .out y .err)
   if (level === 'ERROR') {
     console.error(formattedMessage);
   } else if (level === 'WARN') {
     console.warn(formattedMessage);
   } else {
     console.log(formattedMessage);
+  }
+
+  // 2. Guardar de forma cronológica en nuestro archivo unificado dentro de /daemon
+  try {
+    // Asegurarnos de que la carpeta 'daemon' exista antes de escribir
+    if (!fs.existsSync(logFolder)) {
+      fs.mkdirSync(logFolder, { recursive: true });
+    }
+    // Añadir la línea al archivo (append) de forma segura
+    fs.appendFileSync(logFile, formattedMessage + '\n', 'utf-8');
+  } catch (err) {
+    // Si falla la escritura en disco (por permisos, etc), lo dejamos pasar 
+    // para no congelar el servicio, la consola nativa ya tendrá el registro.
   }
 }
 
@@ -97,12 +114,12 @@ function bloquearInternet() {
 
   exec(cmdDelete, (errDel, stdoutDel, stderrDel) => {
       if (errDel) {
-        // Es normal que dé error si la regla no existía, lo catalogamos como WARN o DEBUG
+        // Es normal que dé error si la regla no existía
         logMessage('WARN', 'FIREWALL', `Alerta al borrar regla previa (suele ser normal si no existía): ${errDel.message.replace(/\r?\n|\r/g, ' ')}`);
       }
 
       // Definimos todos los rangos de IPs públicas de Internet.
-      // No incluimos los rangos privados (10.x, 172.16-31.x, 192.168.x y 127.x) para salvar la LAN y el WebSocket.
+      // Al NO incluir la LAN (192.168.x.x, 10.x.x.x, 127.0.0.1, etc), el WebSocket se mantiene conectado perfectamente.
       const rangosPublicos = "1.0.0.0-9.255.255.255,11.0.0.0-126.255.255.255,128.0.0.0-169.253.255.255,169.255.0.0-172.15.255.255,172.32.0.0-192.167.255.255,192.169.0.0-223.255.255.255";
       const cmdAdd = `netsh advfirewall firewall add rule name="BloqueoInternet" dir=out action=block remoteip="${rangosPublicos}"`;
       
@@ -203,7 +220,7 @@ function conectarServidor() {
 
   ws.on('error', (err) => {
     logMessage('ERROR', 'WEBSOCKET', `Se produjo un error en la capa del WebSocket: ${err.message}`);
-    if (ws) ws.terminate(); // Esto disparará el evento 'close' y posteriormente el 'reconnect'
+    if (ws) ws.terminate();
   });
 }
 
