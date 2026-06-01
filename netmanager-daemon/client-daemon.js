@@ -103,37 +103,41 @@ function reconnect() {
 }
 
 // =========================================================================
-// 5. FIREWALL - BLOQUEAR INTERNET (Aislamiento LAN / A prueba de fallos)
+// 5. FIREWALL - BLOQUEAR INTERNET (Aislamiento LAN IPv4 + IPv6)
 // =========================================================================
 
 function bloquearInternet() {
-  logMessage('INFO', 'FIREWALL', 'Iniciando rutina de bloqueo de internet (Aislamiento de IPs públicas).');
+  logMessage('INFO', 'FIREWALL', 'Iniciando rutina de bloqueo de internet (Aislamiento IPv4 e IPv6).');
 
-  const cmdDelete = 'netsh advfirewall firewall delete rule name="BloqueoInternet"';
-  logMessage('DEBUG', 'FIREWALL', `Ejecutando limpieza previa: ${cmdDelete}`);
+  const cmdDelete4 = 'netsh advfirewall firewall delete rule name="BloqueoInternet"';
+  const cmdDelete6 = 'netsh advfirewall firewall delete rule name="BloqueoInternetIPv6"';
 
-  exec(cmdDelete, (errDel, stdoutDel, stderrDel) => {
-      if (errDel) {
-        // Es normal que dé error si la regla no existía
-        logMessage('WARN', 'FIREWALL', `Alerta al borrar regla previa (suele ser normal si no existía): ${errDel.message.replace(/\r?\n|\r/g, ' ')}`);
-      }
-
-      // Definimos todos los rangos de IPs públicas de Internet.
-      // Al NO incluir la LAN (192.168.x.x, 10.x.x.x, 127.0.0.1, etc), el WebSocket se mantiene conectado perfectamente.
-      const rangosPublicos = "1.0.0.0-9.255.255.255,11.0.0.0-126.255.255.255,128.0.0.0-169.253.255.255,169.255.0.0-172.15.255.255,172.32.0.0-192.167.255.255,192.169.0.0-223.255.255.255";
-      const cmdAdd = `netsh advfirewall firewall add rule name="BloqueoInternet" dir=out action=block remoteip="${rangosPublicos}"`;
+  // 1. Limpieza de reglas previas
+  exec(cmdDelete4, () => {
+    exec(cmdDelete6, () => {
       
-      logMessage('DEBUG', 'FIREWALL', `Ejecutando creación de regla: ${cmdAdd}`);
+      // Rangos Públicos IPv4
+      const rangosPublicosV4 = "1.0.0.0-9.255.255.255,11.0.0.0-126.255.255.255,128.0.0.0-169.253.255.255,169.255.0.0-172.15.255.255,172.32.0.0-192.167.255.255,192.169.0.0-223.255.255.255";
+      const cmdAddV4 = `netsh advfirewall firewall add rule name="BloqueoInternet" dir=out action=block remoteip="${rangosPublicosV4}"`;
+      
+      // Rango Público IPv6 (2000::/3 cubre todo el internet global IPv6)
+      const cmdAddV6 = `netsh advfirewall firewall add rule name="BloqueoInternetIPv6" dir=out action=block remoteip="2000::/3"`;
 
-      exec(cmdAdd, (errAdd, stdoutAdd, stderrAdd) => {
-        if (errAdd) {
-            logMessage('ERROR', 'FIREWALL', `Fallo crítico al crear la regla de bloqueo LAN: ${errAdd.message}`);
-            if (stderrAdd) logMessage('ERROR', 'FIREWALL', `Detalle del error del sistema (STDERR): ${stderrAdd.trim()}`);
-        } else {
-            logMessage('INFO', 'FIREWALL', '✅ Regla de bloqueo aplicada exitosamente. Tráfico hacia internet denegado; LAN permitida.');
-            if (stdoutAdd) logMessage('DEBUG', 'FIREWALL', `Respuesta del sistema (STDOUT): ${stdoutAdd.trim()}`);
-        }
+      // Aplicar Bloqueo IPv4
+      logMessage('DEBUG', 'FIREWALL', 'Aplicando regla IPv4...');
+      exec(cmdAddV4, (err4, stdout4) => {
+        if (err4) logMessage('ERROR', 'FIREWALL', `Fallo en regla IPv4: ${err4.message}`);
+        else logMessage('INFO', 'FIREWALL', `✅ Regla IPv4 aplicada: ${stdout4.trim()}`);
+        
+        // Aplicar Bloqueo IPv6
+        logMessage('DEBUG', 'FIREWALL', 'Aplicando regla IPv6...');
+        exec(cmdAddV6, (err6, stdout6) => {
+          if (err6) logMessage('ERROR', 'FIREWALL', `Fallo en regla IPv6: ${err6.message}`);
+          else logMessage('INFO', 'FIREWALL', `✅ Regla IPv6 aplicada: ${stdout6.trim()}`);
+        });
       });
+
+    });
   });
 }
 
@@ -142,19 +146,19 @@ function bloquearInternet() {
 // =========================================================================
 
 function desbloquearInternet() {
-  logMessage('INFO', 'FIREWALL', 'Iniciando rutina de desbloqueo (Restaurando conexión a internet).');
+  logMessage('INFO', 'FIREWALL', 'Iniciando rutina de desbloqueo (Eliminando reglas).');
 
-  const cmdDelete = 'netsh advfirewall firewall delete rule name="BloqueoInternet"';
-  logMessage('DEBUG', 'FIREWALL', `Ejecutando comando: ${cmdDelete}`);
+  const cmdDelete4 = 'netsh advfirewall firewall delete rule name="BloqueoInternet"';
+  const cmdDelete6 = 'netsh advfirewall firewall delete rule name="BloqueoInternetIPv6"';
 
-  exec(cmdDelete, (err, stdout, stderr) => {
-    if (err) {
-      logMessage('ERROR', 'FIREWALL', `Error al intentar eliminar la regla de bloqueo: ${err.message}`);
-      if (stderr) logMessage('ERROR', 'FIREWALL', `Detalle del error del sistema (STDERR): ${stderr.trim()}`);
-    } else {
-      logMessage('INFO', 'FIREWALL', '✅ Regla eliminada. Internet restaurado correctamente.');
-      if (stdout) logMessage('DEBUG', 'FIREWALL', `Respuesta del sistema (STDOUT): ${stdout.trim()}`);
-    }
+  exec(cmdDelete4, (err4, stdout4) => {
+    exec(cmdDelete6, (err6, stdout6) => {
+      if (err4 && err6) {
+        logMessage('ERROR', 'FIREWALL', 'No se pudieron eliminar las reglas (posiblemente ya estaban borradas).');
+      } else {
+        logMessage('INFO', 'FIREWALL', '✅ Reglas eliminadas. Internet restaurado por completo.');
+      }
+    });
   });
 }
 
