@@ -102,38 +102,109 @@ function reconnect() {
   }, 5000);
 }
 
+// Añade esta importación al principio de tu archivo si no está (junto a fs, path, etc.)
+const dns = require('dns').promises; 
+
 // =========================================================================
-// 5. FIREWALL - BLOQUEAR INTERNET (Aislamiento LAN IPv4 + IPv6)
+// 5. HELPER MATEMÁTICO: PERFORAR RANGOS DE FIREWALL
 // =========================================================================
 
-function bloquearInternet() {
-  logMessage('INFO', 'FIREWALL', 'Iniciando rutina de bloqueo de internet (Aislamiento IPv4 e IPv6).');
+function ipToLong(ip) {
+  return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+}
+
+function longToIp(long) {
+  return [(long >>> 24) & 255, (long >>> 16) & 255, (long >>> 8) & 255, long & 255].join('.');
+}
+
+function generarRangosConExcepciones(ipsAExcluir) {
+  // Rangos base originales de internet público (salvando las IPs locales/LAN)
+  let rangosLong = [
+    { start: ipToLong("1.0.0.0"), end: ipToLong("9.255.255.255") },
+    { start: ipToLong("11.0.0.0"), end: ipToLong("126.255.255.255") },
+    { start: ipToLong("128.0.0.0"), end: ipToLong("169.253.255.255") },
+    { start: ipToLong("169.255.0.0"), end: ipToLong("172.15.255.255") },
+    { start: ipToLong("172.32.0.0"), end: ipToLong("192.167.255.255") },
+    { start: ipToLong("192.169.0.0"), end: ipToLong("223.255.255.255") }
+  ];
+
+  // Por cada IP excepcional, dividimos el rango donde impacte
+  ipsAExcluir.forEach(ip => {
+    const targetLong = ipToLong(ip);
+    let nuevosRangos = [];
+
+    rangosLong.forEach(r => {
+      if (targetLong >= r.start && targetLong <= r.end) {
+        if (targetLong > r.start) {
+          nuevosRangos.push({ start: r.start, end: targetLong - 1 });
+        }
+        if (targetLong < r.end) {
+          nuevosRangos.push({ start: targetLong + 1, end: r.end });
+        }
+      } else {
+        nuevosRangos.push(r);
+      }
+    });
+    rangosLong = nuevosRangos;
+  });
+
+  // Reconstruimos el string formateado para el comando netsh
+  return rangosLong.map(r => `${longToIp(r.start)}-${longToIp(r.end)}`).join(',');
+}
+
+// =========================================================================
+// 6. FIREWALL - BLOQUEAR INTERNET CON EXCEPCIONES
+// =========================================================================
+
+async function bloquearInternet() {
+  logMessage('INFO', 'FIREWALL', 'Iniciando rutina de bloqueo de internet con excepciones.');
+
+  // Lista de dominios permitidos (puedes agregar más aquí en el futuro)
+  const dominiosPermitidos = [
+    'campus.aulavirtual.unc.edu.ar',
+    'aulavirtual.unc.edu.ar' // Añadido por si carga recursos del dominio raíz
+  ];
+
+  let ipsExcepciones = [];
+
+  // Resolver IPs dinámicamente
+  for (const dominio of dominiosPermitidos) {
+    try {
+      const addresses = await dns.resolve4(dominio);
+      ipsExcepciones.push(...addresses);
+      logMessage('INFO', 'FIREWALL', `DNS obtenido para ${dominio}: ${addresses.join(', ')}`);
+    } catch (err) {
+      logMessage('WARN', 'FIREWALL', `No se pudo resolver el dominio ${dominio}: ${err.message}`);
+    }
+  }
+
+  // Quitar IPs duplicadas si las hubiera
+  ipsExcepciones = [...new Set(ipsExcepciones)];
+
+  // Calcular la cadena de rangos omitiendo las IPs del Campus
+  const rangosPublicosV4 = generarRangosConExcepciones(ipsExcepciones);
 
   const cmdDelete4 = 'netsh advfirewall firewall delete rule name="BloqueoInternet"';
   const cmdDelete6 = 'netsh advfirewall firewall delete rule name="BloqueoInternetIPv6"';
 
-  // 1. Limpieza de reglas previas
   exec(cmdDelete4, () => {
     exec(cmdDelete6, () => {
       
-      // Rangos Públicos IPv4
-      const rangosPublicosV4 = "1.0.0.0-9.255.255.255,11.0.0.0-126.255.255.255,128.0.0.0-169.253.255.255,169.255.0.0-172.15.255.255,172.32.0.0-192.167.255.255,192.169.0.0-223.255.255.255";
       const cmdAddV4 = `netsh advfirewall firewall add rule name="BloqueoInternet" dir=out action=block remoteip="${rangosPublicosV4}"`;
       
-      // Rango Público IPv6 (2000::/3 cubre todo el internet global IPv6)
+      // Mantenemos IPv6 bloqueado completamente por seguridad. 
+      // Al no poder usar IPv6, el navegador usará automáticamente IPv4 donde el Campus está permitido.
       const cmdAddV6 = `netsh advfirewall firewall add rule name="BloqueoInternetIPv6" dir=out action=block remoteip="2000::/3"`;
 
-      // Aplicar Bloqueo IPv4
-      logMessage('DEBUG', 'FIREWALL', 'Aplicando regla IPv4...');
+      logMessage('DEBUG', 'FIREWALL', 'Aplicando regla de bloqueo IPv4 (Excepciones activas)...');
       exec(cmdAddV4, (err4, stdout4) => {
         if (err4) logMessage('ERROR', 'FIREWALL', `Fallo en regla IPv4: ${err4.message}`);
-        else logMessage('INFO', 'FIREWALL', `✅ Regla IPv4 aplicada: ${stdout4.trim()}`);
+        else logMessage('INFO', 'FIREWALL', `✅ Regla IPv4 con excepciones aplicada: ${stdout4.trim()}`);
         
-        // Aplicar Bloqueo IPv6
         logMessage('DEBUG', 'FIREWALL', 'Aplicando regla IPv6...');
         exec(cmdAddV6, (err6, stdout6) => {
           if (err6) logMessage('ERROR', 'FIREWALL', `Fallo en regla IPv6: ${err6.message}`);
-          else logMessage('INFO', 'FIREWALL', `✅ Regla IPv6 aplicada: ${stdout6.trim()}`);
+          else logMessage('INFO', 'FIREWALL', `✅ Regla IPv6 de aislamiento aplicada.`);
         });
       });
 
@@ -142,7 +213,7 @@ function bloquearInternet() {
 }
 
 // =========================================================================
-// 6. FIREWALL - DESBLOQUEAR INTERNET
+// 7. FIREWALL - DESBLOQUEAR INTERNET
 // =========================================================================
 
 function desbloquearInternet() {
@@ -151,12 +222,12 @@ function desbloquearInternet() {
   const cmdDelete4 = 'netsh advfirewall firewall delete rule name="BloqueoInternet"';
   const cmdDelete6 = 'netsh advfirewall firewall delete rule name="BloqueoInternetIPv6"';
 
-  exec(cmdDelete4, (err4, stdout4) => {
-    exec(cmdDelete6, (err6, stdout6) => {
+  exec(cmdDelete4, (err4) => {
+    exec(cmdDelete6, (err6) => {
       if (err4 && err6) {
-        logMessage('ERROR', 'FIREWALL', 'No se pudieron eliminar las reglas (posiblemente ya estaban borradas).');
+        logMessage('WARN', 'FIREWALL', 'Las reglas no existían o ya estaban borradas.');
       } else {
-        logMessage('INFO', 'FIREWALL', '✅ Reglas eliminadas. Internet restaurado por completo.');
+        logMessage('INFO', 'FIREWALL', '✅ Red liberada por completo. Acceso total a Internet.');
       }
     });
   });
