@@ -106,11 +106,10 @@ function reconnect() {
 const dns = require('dns').promises; 
 
 // =========================================================================
-// 5. HELPER MATEMÁTICO: PERFORAR RANGOS DE FIREWALL (OPTIMIZADO Y SEGURO)
+// 5. HELPER MATEMÁTICO: PERFORAR RANGOS DE FIREWALL (SOPORTE DE SUBREDES Y LOTES)
 // =========================================================================
 
 function ipToLong(ip) {
-  // Usamos multiplicación estándar para evitar problemas con desbordamiento de enteros con signo en JS (bitwise << 8)
   return ip.split('.').reduce((acc, octet) => acc * 256 + parseInt(octet, 10), 0);
 }
 
@@ -118,8 +117,8 @@ function longToIp(long) {
   return [(long >>> 24) & 255, (long >>> 16) & 255, (long >>> 8) & 255, long & 255].join('.');
 }
 
-function generarRangosConExcepciones(ipsAExcluir) {
-  // Rangos base originales de internet público (salvando las IPs locales/LAN)
+function generarRangosConExcepciones(exclusiones) {
+  // Rangos base de internet público (anteponiendo la salvaguarda de IPs de LAN)
   let rangosLong = [
     { start: ipToLong("1.0.0.0"), end: ipToLong("9.255.255.255") },
     { start: ipToLong("11.0.0.0"), end: ipToLong("126.255.255.255") },
@@ -129,18 +128,20 @@ function generarRangosConExcepciones(ipsAExcluir) {
     { start: ipToLong("192.169.0.0"), end: ipToLong("223.255.255.255") }
   ];
 
-  // Por cada IP excepcional, dividimos el rango donde impacte
-  ipsAExcluir.forEach(ip => {
-    const targetLong = ipToLong(ip);
+  // Procesar cada exclusión (puede ser una IP única o un rango/subred completa)
+  exclusiones.forEach(exc => {
+    const startLong = ipToLong(exc.start);
+    const endLong = ipToLong(exc.end);
     let nuevosRangos = [];
 
     rangosLong.forEach(r => {
-      if (targetLong >= r.start && targetLong <= r.end) {
-        if (targetLong > r.start) {
-          nuevosRangos.push({ start: r.start, end: targetLong - 1 });
+      // Si la exclusión intersecta con el rango base actual, lo subdividimos
+      if (startLong <= r.end && endLong >= r.start) {
+        if (startLong > r.start) {
+          nuevosRangos.push({ start: r.start, end: startLong - 1 });
         }
-        if (targetLong < r.end) {
-          nuevosRangos.push({ start: targetLong + 1, end: r.end });
+        if (endLong < r.end) {
+          nuevosRangos.push({ start: endLong + 1, end: r.end });
         }
       } else {
         nuevosRangos.push(r);
@@ -149,76 +150,102 @@ function generarRangosConExcepciones(ipsAExcluir) {
     rangosLong = nuevosRangos;
   });
 
-  // Reconstruimos el string formateado para el comando netsh
-  return rangosLong.map(r => `${longToIp(r.start)}-${longToIp(r.end)}`).join(',');
+  // Retornamos un ARRAY de strings de rangos individuales
+  return rangosLong.map(r => `${longToIp(r.start)}-${longToIp(r.end)}`);
 }
 
 // =========================================================================
-// 6. FIREWALL - BLOQUEAR INTERNET CON EXCEPCIONES (CORREGIDO)
+// 6. FIREWALL - BLOQUEAR INTERNET CON EXCEPCIONES (OPTIMIZADO POR LOTES)
 // =========================================================================
 
-async function bloquearInternet() {
-  logMessage('INFO', 'FIREWALL', 'Iniciando rutina de bloqueo de internet con excepciones.');
+async function bockearFirewallEnLotes(listaRangos) {
+  const tamanoLote = 5; // Cantidad segura de rangos por comando netsh
+  let numeroLote = 1;
 
-  // 🛑 CORRECCIÓN CRÍTICA 1: Limpiar cualquier regla previa ANTES de resolver DNS.
-  // Si la red ya estaba bloqueada, 'dns.resolve4' fallará por auto-bloqueo.
+  for (let i = 0; i < listaRangos.length; i += tamanoLote) {
+    const lote = listaRangos.slice(i, i + tamanoLote);
+    const remoteipStr = lote.join(',');
+
+    const cmdAddV4 = `netsh advfirewall firewall add rule name="BloqueoInternet" dir=out action=block remoteip="${remoteipStr}"`;
+    
+    await new Promise(resolve => {
+      exec(cmdAddV4, (err, stdout) => {
+        if (err) {
+          logMessage('ERROR', 'FIREWALL', `Error al aplicar lote ${numeroLote}: ${err.message}`);
+        } else {
+          logMessage('DEBUG', 'FIREWALL', `Lote ${numeroLote} de bloqueo IPv4 aplicado exitosamente.`);
+        }
+        resolve();
+      });
+    });
+    numeroLote++;
+  }
+}
+
+async function bloquearInternet() {
+  logMessage('INFO', 'FIREWALL', 'Iniciando rutina de bloqueo de internet por lotes seguros.');
+
+  // 1. Desbloqueo flash previo para evitar el auto-bloqueo del DNS de Node
   await new Promise(resolve => exec('netsh advfirewall firewall delete rule name="BloqueoInternet"', () => resolve()));
   await new Promise(resolve => exec('netsh advfirewall firewall delete rule name="BloqueoInternetIPv6"', () => resolve()));
 
-  // 🛑 CORRECCIÓN CRÍTICA 2: El navegador del cliente necesita consultar servidores DNS públicos.
-  // Inicializamos las excepciones directamente con las IPs de Google DNS y Cloudflare DNS.
-  let ipsExcepciones = [
-    '8.8.8.8', '8.8.4.4', // Google DNS
-    '1.1.1.1', '1.0.0.1'  // Cloudflare DNS
+  // 2. Estructurar matriz de exclusiones fijas (IPs de DNS y el bloque completo de la UNC)
+  let exclusiones = [
+    { start: '8.8.8.8', end: '8.8.8.8' }, // Google DNS
+    { start: '8.8.4.4', end: '8.8.4.4' },
+    { start: '1.1.1.1', end: '1.1.1.1' }, // Cloudflare DNS
+    { start: '1.0.0.1', end: '1.0.0.1' },
+    
+    // 🎓 RANGO INSTITUCIONAL UNC: Toda la subred de la universidad queda libre por seguridad
+    { start: '200.16.0.0', end: '200.16.255.255' }
   ];
 
-  // 🛑 CORRECCIÓN CRÍTICA 3: Lista de dominios institucionales y CDNs requeridos para que el Campus funcione.
   const dominiosPermitidos = [
     'campus.aulavirtual.unc.edu.ar',
     'aulavirtual.unc.edu.ar',
-    'mi.unc.edu.ar',          // ¡Indispensable! Es el portal único de login (SSO) de la UNC
-    'www.unc.edu.ar',         // Dominio principal de la universidad (Librerías/Imágenes)
-    'fonts.googleapis.com',   // Fuentes de interfaz de Google
+    'mi.unc.edu.ar',
+    'www.unc.edu.ar',
+    'fonts.googleapis.com',
     'fonts.gstatic.com',
-    'cdnjs.cloudflare.com'    // Assets estáticos de Cloudflare comunes en Moodle
+    'cdnjs.cloudflare.com'
   ];
 
-  // Resolver IPs de los dominios dinámicamente
+  // 3. Resolver dinámicamente otros dominios (como fuentes de Google o CDNs)
   for (const dominio of dominiosPermitidos) {
     try {
       const addresses = await dns.resolve4(dominio);
-      ipsExcepciones.push(...addresses);
+      addresses.forEach(ip => {
+        exclusiones.push({ start: ip, end: ip });
+      });
       logMessage('INFO', 'FIREWALL', `DNS obtenido para ${dominio}: ${addresses.join(', ')}`);
     } catch (err) {
-      logMessage('WARN', 'FIREWALL', `No se pudo resolver el dominio ${dominio}: ${err.message}`);
+      logMessage('WARN', 'FIREWALL', `No se pudo resolver el dominio ${dominio} (usará rangos fijos): ${err.message}`);
     }
   }
 
-  // Quitar IPs duplicadas
-  ipsExcepciones = [...new Set(ipsExcepciones)];
-
-  // Calcular la cadena de rangos omitiendo las IPs del listado seguro
-  const rangosPublicosV4 = generarRangosConExcepciones(ipsExcepciones);
-
-  // Comando definitivo de bloqueo IPv4 estructurado con las perforaciones
-  const cmdAddV4 = `netsh advfirewall firewall add rule name="BloqueoInternet" dir=out action=block remoteip="${rangosPublicosV4}"`;
-  
-  // Mantenemos IPv6 bloqueado completamente por seguridad.
-  const cmdAddV6 = `netsh advfirewall firewall add rule name="BloqueoInternetIPv6" dir=out action=block remoteip="2000::/3"`;
-
-  logMessage('DEBUG', 'FIREWALL', 'Aplicando regla de bloqueo IPv4 (Excepciones activas)...');
-  exec(cmdAddV4, (err4, stdout4) => {
-    if (err4) {
-      logMessage('ERROR', 'FIREWALL', `Fallo al aplicar regla IPv4: ${err4.message}`);
-    } else {
-      logMessage('INFO', 'FIREWALL', `✅ Regla IPv4 con excepciones aplicada con éxito.`);
+  // 4. Deduplicar la lista de exclusiones
+  const exclusionesUnicas = [];
+  const registroClaves = new Set();
+  exclusiones.forEach(e => {
+    const clave = `${e.start}-${e.end}`;
+    if (!registroClaves.has(clave)) {
+      registroClaves.add(clave);
+      exclusionesUnicas.push(e);
     }
-    
-    logMessage('DEBUG', 'FIREWALL', 'Aplicando regla IPv6...');
-    exec(cmdAddV6, (err6, stdout6) => {
-      if (err6) logMessage('ERROR', 'FIREWALL', `Fallo en regla IPv6: ${err6.message}`);
-      else logMessage('INFO', 'FIREWALL', `✅ Regla IPv6 de aislamiento aplicada.`);
-    });
+  });
+
+  // 5. Calcular los fragmentos públicos resultantes
+  const listaRangosV4 = generarRangosConExcepciones(exclusionesUnicas);
+  logMessage('INFO', 'FIREWALL', `Se calcularon ${listaRangosV4.length} rangos de bloqueo. Aplicando en sub-reglas...`);
+
+  // 6. Ejecutar el despliegue secuencial de sub-reglas IPv4
+  await bockearFirewallEnLotes(listaRangosV4);
+
+  // 7. Bloquear IPv6 por completo (fuerza al sistema a usar la perforación IPv4)
+  const cmdAddV6 = `netsh advfirewall firewall add rule name="BloqueoInternetIPv6" dir=out action=block remoteip="2000::/3"`;
+  exec(cmdAddV6, (err6) => {
+    if (err6) logMessage('ERROR', 'FIREWALL', `Fallo en regla IPv6: ${err6.message}`);
+    else logMessage('INFO', 'FIREWALL', `✅ Bloqueo completo con excepciones activo.`);
   });
 }
 
