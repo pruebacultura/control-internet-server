@@ -213,7 +213,7 @@ async function bloquearInternet() {
 }
 
 // =========================================================================
-// 7. FIREWALL - DESBLOQUEAR INTERNET
+// 6.5 FIREWALL - DESBLOQUEAR INTERNET
 // =========================================================================
 
 function desbloquearInternet() {
